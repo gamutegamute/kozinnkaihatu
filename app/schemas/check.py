@@ -16,6 +16,7 @@ class CheckResultRead(ORMModel):
 class DashboardServiceSummary(ORMModel):
     service_id: int
     service_name: str
+    url: str
     environment: str
     is_active: bool
     latest_check: CheckResultRead | None
