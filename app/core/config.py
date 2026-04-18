@@ -15,8 +15,16 @@ class Settings(BaseSettings):
     check_results_retention_days: int = 30
     retention_cleanup_interval_hours: int = 24
     retention_delete_batch_size: int = 5000
+    notification_backend: str = "log"
+    notification_webhook_url: str | None = None
+    notification_timeout_seconds: int = 5
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
 
 @lru_cache

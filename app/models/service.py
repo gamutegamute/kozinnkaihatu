@@ -24,3 +24,9 @@ class Service(Base):
 
     project = relationship("Project", back_populates="services")
     check_results = relationship("CheckResult", back_populates="service", cascade="all, delete-orphan")
+    notification_state = relationship(
+        "ServiceNotificationState",
+        back_populates="service",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )

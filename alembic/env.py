@@ -7,7 +7,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
 from app.db.base import Base
-from app.models import check_result, project, project_member, service, user  # noqa: F401
+from app.models import check_result, project, project_member, service, service_notification_state, user  # noqa: F401
 
 config = context.config
 

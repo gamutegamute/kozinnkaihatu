@@ -9,8 +9,10 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.models import ServiceNotificationState  # noqa: F401
 from app.models.check_result import CheckResult
 from app.models.service import Service
+from worker.notifications import evaluate_and_send_notification, get_notifier
 from worker.retention import cleanup_old_check_results
 
 logger = logging.getLogger("monitoring_worker")
@@ -76,6 +78,7 @@ def monitor_service(client: httpx.Client, service: Service) -> CheckResult:
 
 def run_monitoring_cycle() -> None:
     with SessionLocal() as db:
+        notifier = get_notifier()
         services = list(
             db.scalars(select(Service).where(Service.is_active.is_(True)).order_by(Service.id.asc())).all()
         )
@@ -86,6 +89,15 @@ def run_monitoring_cycle() -> None:
                 result = monitor_service(client=client, service=service)
                 db.add(result)
                 db.commit()
+                db.refresh(result)
+
+                try:
+                    evaluate_and_send_notification(db=db, notifier=notifier, service=service, result=result)
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    logger.exception("Notification dispatch failed for service_id=%s", service.id)
+
                 logger.info(
                     "Checked service_id=%s url=%s success=%s status_code=%s response_time_ms=%s",
                     service.id,
