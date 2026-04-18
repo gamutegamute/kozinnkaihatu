@@ -10,6 +10,11 @@ class Settings(BaseSettings):
     secret_key: str = "change-me"
     access_token_expire_minutes: int = 60
     database_url: str = "postgresql+psycopg://postgres:postgres@db:5432/monitoring"
+    monitor_interval_seconds: int = 60
+    request_timeout_seconds: int = 5
+    check_results_retention_days: int = 30
+    retention_cleanup_interval_hours: int = 24
+    retention_delete_batch_size: int = 5000
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
 

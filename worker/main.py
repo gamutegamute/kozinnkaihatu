@@ -2,19 +2,19 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.check_result import CheckResult
 from app.models.service import Service
+from worker.retention import cleanup_old_check_results
 
 logger = logging.getLogger("monitoring_worker")
 
-CHECK_INTERVAL_SECONDS = 60
-REQUEST_TIMEOUT_SECONDS = 5
 SUCCESS_STATUS_MIN = 200
 SUCCESS_STATUS_MAX_EXCLUSIVE = 400
 
@@ -30,7 +30,7 @@ def monitor_service(client: httpx.Client, service: Service) -> CheckResult:
     started_at = time.perf_counter()
 
     try:
-        response = client.get(service.url, timeout=REQUEST_TIMEOUT_SECONDS)
+        response = client.get(service.url, timeout=settings.request_timeout_seconds)
         response_time_ms = int((time.perf_counter() - started_at) * 1000)
         is_success = SUCCESS_STATUS_MIN <= response.status_code < SUCCESS_STATUS_MAX_EXCLUSIVE
 
@@ -49,7 +49,7 @@ def monitor_service(client: httpx.Client, service: Service) -> CheckResult:
             is_success=False,
             status_code=None,
             response_time_ms=response_time_ms,
-            error_message=f"Timeout after {REQUEST_TIMEOUT_SECONDS} seconds: {exc.__class__.__name__}",
+            error_message=f"Timeout after {settings.request_timeout_seconds} seconds: {exc.__class__.__name__}",
             checked_at=datetime.now(timezone.utc),
         )
     except httpx.HTTPError as exc:
@@ -97,20 +97,41 @@ def run_monitoring_cycle() -> None:
         logger.info("Monitoring cycle completed")
 
 
+def run_retention_cleanup() -> None:
+    with SessionLocal() as db:
+        deleted_rows = cleanup_old_check_results(db=db)
+        logger.info(
+            "Retention cleanup completed: deleted_rows=%s retention_days=%s",
+            deleted_rows,
+            settings.check_results_retention_days,
+        )
+
+
 def main() -> None:
     configure_logging()
-    logger.info("Monitoring worker started with interval=%ss timeout=%ss", CHECK_INTERVAL_SECONDS, REQUEST_TIMEOUT_SECONDS)
+    logger.info(
+        "Monitoring worker started with interval=%ss timeout=%ss retention_days=%s cleanup_interval_hours=%s",
+        settings.monitor_interval_seconds,
+        settings.request_timeout_seconds,
+        settings.check_results_retention_days,
+        settings.retention_cleanup_interval_hours,
+    )
+    next_retention_run_at = datetime.now(timezone.utc)
 
     while True:
         cycle_started_at = time.perf_counter()
 
         try:
             run_monitoring_cycle()
+            current_time = datetime.now(timezone.utc)
+            if current_time >= next_retention_run_at:
+                run_retention_cleanup()
+                next_retention_run_at = current_time + timedelta(hours=settings.retention_cleanup_interval_hours)
         except Exception:
             logger.exception("Monitoring cycle failed")
 
         elapsed_seconds = time.perf_counter() - cycle_started_at
-        sleep_seconds = max(0, CHECK_INTERVAL_SECONDS - elapsed_seconds)
+        sleep_seconds = max(0, settings.monitor_interval_seconds - elapsed_seconds)
         logger.info("Sleeping for %.2f seconds", sleep_seconds)
         time.sleep(sleep_seconds)
 

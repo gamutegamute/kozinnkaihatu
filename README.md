@@ -10,7 +10,7 @@ FastAPI + PostgreSQL + SQLAlchemy + Alembic で構成した、チーム向けサ
 - 認可は「所属プロジェクトのみアクセス可」「メンバー追加は owner のみ」
 - 監視ワーカーは API と分離した別プロセス
 - HTTP チェックは `httpx` の同期クライアントを採用
-- 理由は、MVP の単一ワーカーでは実装と運用が最も単純で、ECS で別サービスに切り出しやすいため
+- retention は「一定日数より古い `check_results` を削除」で実装
 
 ## ディレクトリ構成
 
@@ -20,7 +20,8 @@ FastAPI + PostgreSQL + SQLAlchemy + Alembic で構成した、チーム向けサ
 │   ├── env.py
 │   ├── script.py.mako
 │   └── versions
-│       └── 0001_initial.py
+│       ├── 0001_initial.py
+│       └── 0002_add_check_results_latest_lookup_index.py
 ├── app
 │   ├── api
 │   │   ├── deps.py
@@ -54,7 +55,9 @@ FastAPI + PostgreSQL + SQLAlchemy + Alembic で構成した、チーム向けサ
 │   └── main.py
 ├── worker
 │   ├── Dockerfile
-│   └── main.py
+│   ├── main.py
+│   ├── retention.py
+│   └── retention_job.py
 ├── .env.example
 ├── alembic.ini
 ├── docker-compose.yml
@@ -111,10 +114,9 @@ docker compose logs -f worker
 
 ```bash
 docker compose up --build
-docker compose exec api alembic revision --autogenerate -m "message"
 docker compose exec api alembic upgrade head
-docker compose exec api alembic downgrade -1
 docker compose logs -f worker
+docker compose exec worker python -m worker.retention_job
 ```
 
 ## API 一覧
@@ -159,8 +161,18 @@ docker compose logs -f worker
 - 結果は `check_results` に保存
 - 例外時は `status_code = null`、`error_message` に例外内容を保存
 
-## MVP の仕様メモ
+## Retention の仕様
 
-- 監視ワーカーはシンプルな単一プロセス前提
-- 将来の EventBridge / ECS ワーカー置き換えを見据えた分離構成
-- 通知、インシデント、SLO は未実装
+- MVP では `check_results` を 30 日保持
+- 30 日より古い `check_results` は削除対象
+- cleanup は worker 内で 24 時間ごとに実行
+- 削除は一括ではなくバッチ単位で実行
+- 後から `python -m worker.retention_job` を ECS scheduled task / EventBridge に切り出せる構成
+
+## 主要な環境変数
+
+- `MONITOR_INTERVAL_SECONDS=60`
+- `REQUEST_TIMEOUT_SECONDS=5`
+- `CHECK_RESULTS_RETENTION_DAYS=30`
+- `RETENTION_CLEANUP_INTERVAL_HOURS=24`
+- `RETENTION_DELETE_BATCH_SIZE=5000`
