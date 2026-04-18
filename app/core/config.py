@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     retention_delete_batch_size: int = 5000
     notification_backend: str = "log"
     notification_webhook_url: str | None = None
+    notification_discord_webhook_url: str | None = None
     notification_timeout_seconds: int = 5
 
     model_config = SettingsConfigDict(

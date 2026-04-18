@@ -22,3 +22,8 @@ class Project(Base):
     creator = relationship("User", back_populates="created_projects")
     members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
     services = relationship("Service", back_populates="project", cascade="all, delete-orphan")
+    notification_channels = relationship(
+        "ProjectNotificationChannel",
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )

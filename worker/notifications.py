@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.check_result import CheckResult
+from app.models.project_notification_channel import ProjectNotificationChannel
 from app.models.service import Service
 from app.models.service_notification_state import ServiceNotificationState
 
@@ -69,13 +71,104 @@ class WebhookNotifier:
             response.raise_for_status()
 
 
-def get_notifier() -> Notifier:
-    backend = settings.notification_backend.lower().strip()
-    if backend == "webhook":
-        if not settings.notification_webhook_url:
-            raise ValueError("NOTIFICATION_WEBHOOK_URL is required when NOTIFICATION_BACKEND=webhook")
-        return WebhookNotifier(settings.notification_webhook_url)
-    return LogNotifier()
+class DiscordNotifier:
+    def __init__(self, webhook_url: str) -> None:
+        self.webhook_url = webhook_url
+
+    def send(self, payload: NotificationPayload) -> None:
+        discord_payload = {
+            "content": format_discord_message(payload),
+        }
+        with httpx.Client(timeout=settings.notification_timeout_seconds) as client:
+            response = client.post(self.webhook_url, json=discord_payload)
+            response.raise_for_status()
+
+
+def format_discord_message(payload: NotificationPayload) -> str:
+    title = "ALERT: service check failed" if payload.event_type == "failure" else "RECOVERY: service is healthy again"
+    status_text = "FAILED" if payload.event_type == "failure" else "RECOVERED"
+    status_code = payload.status_code if payload.status_code is not None else "n/a"
+    response_time = f"{payload.response_time_ms} ms" if payload.response_time_ms is not None else "n/a"
+    error_message = payload.error_message or "-"
+    return (
+        f"**{title}**\n"
+        f"Project: `{payload.project_name}`\n"
+        f"Service: `{payload.service_name}`\n"
+        f"Environment: `{payload.environment}`\n"
+        f"URL: {payload.url}\n"
+        f"Status: `{status_text}`\n"
+        f"HTTP status: `{status_code}`\n"
+        f"Response time: `{response_time}`\n"
+        f"Checked at: `{payload.checked_at.isoformat()}`\n"
+        f"Error: `{error_message}`"
+    )
+
+
+def build_notifier_for_channel(channel: ProjectNotificationChannel) -> Notifier:
+    channel_type = channel.channel_type.lower().strip()
+    if channel_type == "log":
+        return LogNotifier()
+    if channel_type == "discord":
+        if not channel.secret_ref:
+            raise ValueError("secret_ref is required for discord channels")
+        webhook_url = os.getenv(channel.secret_ref)
+        if not webhook_url:
+            raise ValueError(f"Environment variable '{channel.secret_ref}' is not set")
+        return DiscordNotifier(webhook_url)
+    if channel_type == "webhook":
+        if not channel.secret_ref:
+            raise ValueError("secret_ref is required for webhook channels")
+        webhook_url = os.getenv(channel.secret_ref)
+        if not webhook_url:
+            raise ValueError(f"Environment variable '{channel.secret_ref}' is not set")
+        return WebhookNotifier(webhook_url)
+    raise ValueError(f"Unsupported channel_type '{channel.channel_type}'")
+
+
+def get_project_notification_channels(db: Session, project_id: int) -> list[ProjectNotificationChannel]:
+    statement = (
+        select(ProjectNotificationChannel)
+        .where(
+            ProjectNotificationChannel.project_id == project_id,
+            ProjectNotificationChannel.is_enabled.is_(True),
+        )
+        .order_by(ProjectNotificationChannel.created_at.asc())
+    )
+    channels = list(db.scalars(statement).all())
+    if channels:
+        return channels
+
+    default_backend = settings.notification_backend.lower().strip()
+    if default_backend == "log":
+        return [
+            ProjectNotificationChannel(
+                project_id=project_id,
+                channel_type="log",
+                display_name="default-log",
+                is_enabled=True,
+            )
+        ]
+    if default_backend == "discord" and settings.notification_discord_webhook_url:
+        return [
+            ProjectNotificationChannel(
+                project_id=project_id,
+                channel_type="discord",
+                display_name="default-discord",
+                secret_ref="NOTIFICATION_DISCORD_WEBHOOK_URL",
+                is_enabled=True,
+            )
+        ]
+    if default_backend == "webhook" and settings.notification_webhook_url:
+        return [
+            ProjectNotificationChannel(
+                project_id=project_id,
+                channel_type="webhook",
+                display_name="default-webhook",
+                secret_ref="NOTIFICATION_WEBHOOK_URL",
+                is_enabled=True,
+            )
+        ]
+    return []
 
 
 def get_or_create_notification_state(db: Session, service_id: int) -> ServiceNotificationState:
@@ -91,7 +184,6 @@ def get_or_create_notification_state(db: Session, service_id: int) -> ServiceNot
 
 def evaluate_and_send_notification(
     db: Session,
-    notifier: Notifier,
     service: Service,
     result: CheckResult,
 ) -> None:
@@ -130,7 +222,13 @@ def evaluate_and_send_notification(
         response_time_ms=result.response_time_ms,
         error_message=result.error_message,
     )
-    notifier.send(payload)
+
+    channels = get_project_notification_channels(db=db, project_id=service.project_id)
+    if not channels:
+        logger.info("No enabled notification channels for project_id=%s", service.project_id)
+    for channel in channels:
+        notifier = build_notifier_for_channel(channel)
+        notifier.send(payload)
 
     state.last_notified_status = current_status
     state.last_notification_at = now
