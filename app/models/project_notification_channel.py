@@ -23,3 +23,4 @@ class ProjectNotificationChannel(Base):
     )
 
     project = relationship("Project", back_populates="notification_channels")
+    notification_events = relationship("NotificationEvent", back_populates="channel")

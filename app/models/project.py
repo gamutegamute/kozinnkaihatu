@@ -27,3 +27,5 @@ class Project(Base):
         back_populates="project",
         cascade="all, delete-orphan",
     )
+    notification_events = relationship("NotificationEvent", back_populates="project")
+    incidents = relationship("Incident", back_populates="project")

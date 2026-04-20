@@ -12,6 +12,7 @@ from app.db.session import SessionLocal
 from app.models import ProjectNotificationChannel, ServiceNotificationState  # noqa: F401
 from app.models.check_result import CheckResult
 from app.models.service import Service
+from worker.incidents import reconcile_incident_state
 from worker.notifications import evaluate_and_send_notification
 from worker.retention import cleanup_old_check_results
 
@@ -91,6 +92,7 @@ def run_monitoring_cycle() -> None:
                 db.refresh(result)
 
                 try:
+                    reconcile_incident_state(db=db, service=service, result=result)
                     evaluate_and_send_notification(db=db, service=service, result=result)
                     db.commit()
                 except Exception:

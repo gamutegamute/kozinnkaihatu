@@ -20,3 +20,6 @@ class CheckResult(Base):
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     service = relationship("Service", back_populates="check_results")
+    notification_events = relationship("NotificationEvent", back_populates="check_result")
+    opened_incidents = relationship("Incident", foreign_keys="Incident.opened_check_result_id", back_populates="opened_check_result")
+    closed_incidents = relationship("Incident", foreign_keys="Incident.closed_check_result_id", back_populates="closed_check_result")

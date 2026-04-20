@@ -30,3 +30,5 @@ class Service(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    notification_events = relationship("NotificationEvent", back_populates="service")
+    incidents = relationship("Incident", back_populates="service")
